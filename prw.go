@@ -1,5 +1,5 @@
 // Package prw provides PluggableResponseWriter, which
-// is a ResponseWriter and a CloseNotifier that provides reusability and
+// is a ResponseWriter that provides reusability and
 // resiliency, optimized for handler chains where multiple middlewares may
 // want to modify the response
 package prw
@@ -8,9 +8,12 @@ import (
 	"bytes"
 	"net/http"
 	"sync"
+
+	"go.uber.org/atomic"
 )
 
 var (
+	// We create a pool of bytes.Buffer to optimize memory CRUD
 	bodyPool = sync.Pool{
 		New: func() interface{} {
 			return new(bytes.Buffer)
@@ -18,19 +21,19 @@ var (
 	}
 )
 
-// PluggableResponseWriter is a ResponseWriter and a CloseNotifier that provides
+// PluggableResponseWriter is a ResponseWriter that provides
 // reusability and resiliency, optimized for handler chains where multiple
 // middlewares may want to modify the response
 type PluggableResponseWriter struct {
 	Body       *bytes.Buffer
 	status     int
-	cnchan     chan bool
 	headers    http.Header
 	orig       http.ResponseWriter
 	flushFunc  func(http.ResponseWriter, *PluggableResponseWriter)
-	flush      bool
+	flush      atomic.Bool
 	rmHeaders  []string
 	addHeaders map[string]string
+	closeLock  sync.Mutex
 }
 
 // NewPluggableResponseWriterIfNot returns a pointer to an initialized PluggableResponseWriter and true,
@@ -42,10 +45,10 @@ type PluggableResponseWriter struct {
 // rw, firstRw := NewPluggableResponseWriterIfNot(w)
 // defer rw.FlushToIf(w, firstRw)
 func NewPluggableResponseWriterIfNot(rw http.ResponseWriter) (*PluggableResponseWriter, bool) {
-	switch rw.(type) {
+	switch rw := rw.(type) {
 	case *PluggableResponseWriter:
 		// is not first prw, reuse!
-		return rw.(*PluggableResponseWriter), false
+		return rw, false
 	default:
 		// is first prw, create!
 		w := NewPluggableResponseWriter()
@@ -67,7 +70,7 @@ func NewPluggableResponseWriter() *PluggableResponseWriter {
 	w := PluggableResponseWriter{}
 	// Empty body, get a buffer
 	w.Body = bodyPool.Get().(*bytes.Buffer)
-	w.Body.Reset()
+	w.Body.Reset() // we don't trust it's clean
 	w.headers = make(map[string][]string)
 	w.rmHeaders = make([]string, 0)
 	w.addHeaders = make(map[string]string)
@@ -138,24 +141,18 @@ func (w *PluggableResponseWriter) Write(b []byte) (int, error) {
 		w.Header().Set("Content-Type", http.DetectContentType(b))
 	}
 
-	if w.flush {
+	if w.flush.Load() {
 		w.orig.Write(b)
 	}
 
 	return wlen, err
 }
 
-// FreeBody should only be called if the Body is no longer needed, but the
-// PluggableResponseWriter is still to be used.
-func (w *PluggableResponseWriter) FreeBody() {
-	if w.Body != nil {
-		bodyPool.Put(w.Body)
-		w.Body = nil
-	}
-}
-
 // Close should only be called if the PluggableResponseWriter will no longer be used.
 func (w *PluggableResponseWriter) Close() {
+	w.closeLock.Lock()
+	defer w.closeLock.Unlock()
+
 	if w.Body != nil {
 		bodyPool.Put(w.Body)
 		w.Body = nil
@@ -222,7 +219,10 @@ func (w *PluggableResponseWriter) Flush() {
 		w.flushFunc(w.orig, w)
 	} else if f, ok := w.orig.(http.Flusher); ok {
 		// orig is a Flusher
-		if !w.flush {
+		defer f.Flush()
+
+		// We have an atomic Swap happening here, ensuring there is no race
+		if !w.flush.Swap(true) {
 			w.syncHeaders(w.Header())
 			for k, v := range w.Header() {
 				w.orig.Header()[k] = v
@@ -230,20 +230,9 @@ func (w *PluggableResponseWriter) Flush() {
 
 			w.orig.WriteHeader(w.Code())
 			w.orig.Write(w.Body.Bytes())
-			w.flush = true
 		}
-		f.Flush()
-	}
-}
 
-// CloseNotify returns a channel that receives at most a
-// single value (true) when the client connection has gone
-// away.
-func (w *PluggableResponseWriter) CloseNotify() <-chan bool {
-	if w.cnchan == nil {
-		w.cnchan = make(chan bool)
 	}
-	return w.cnchan
 }
 
 // syncHeaders is a helper to call trimHeaders and setHeaders
