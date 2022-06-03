@@ -36,6 +36,7 @@ type PluggableResponseWriter struct {
 	flush      atomic.Bool
 	rmHeaders  []string
 	addHeaders map[string]string
+	hijacked   bool
 	closeLock  sync.Mutex
 }
 
@@ -217,6 +218,11 @@ func (w *PluggableResponseWriter) Flush() {
 		return
 	}
 
+	if w.hijacked {
+		// We've been hijacked. Noop the flush
+		return
+	}
+
 	if w.flushFunc != nil {
 		// We have a custom flushFunc set
 		w.flushFunc(w.orig, w)
@@ -242,8 +248,9 @@ func (w *PluggableResponseWriter) Flush() {
 func (w *PluggableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hj, ok := w.orig.(http.Hijacker)
 	if !ok {
-		return nil, nil, errors.New("original resposewriter is not a Hijacker")
+		return nil, nil, errors.New("original ResponseWriter is not a Hijacker")
 	}
+	w.hijacked = true
 	return hj.Hijack()
 }
 
