@@ -5,7 +5,10 @@
 package prw
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
+	"net"
 	"net/http"
 	"sync"
 
@@ -233,6 +236,15 @@ func (w *PluggableResponseWriter) Flush() {
 		}
 
 	}
+}
+
+// Hijack implements http.Hijacker
+func (w *PluggableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.orig.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("original resposewriter is not a Hijacker")
+	}
+	return hj.Hijack()
 }
 
 // syncHeaders is a helper to call trimHeaders and setHeaders

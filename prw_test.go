@@ -121,6 +121,30 @@ func Test_Flush(t *testing.T) {
 	})
 }
 
+func Test_Hijack(t *testing.T) {
+	Convey("When a test server wraps a ResponseWriter that doesn't support Hijacking, .Hijack fails properly", t, func() {
+		p := NewPluggableResponseWriter()
+		_, _, err := p.Hijack()
+		So(err, ShouldNotBeNil)
+	})
+
+	Convey("When a test servers wraps a ResponseWriter that supports Hijacking, .Hijack works properly", t, func(c C) {
+		testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p := NewPluggableResponseWriterFromOld(w)
+
+			conn, _, err := p.Hijack()
+			c.So(err, ShouldBeNil)
+			conn.Close()
+
+		}))
+		defer testServer.Close()
+
+		// should return 500
+		_, err := http.Get(testServer.URL)
+		So(err, ShouldNotBeNil)
+	})
+}
+
 // Introducing a lock on flushing seemed non-performant to me, when all we need is
 // the atomic setting of a bool. These benchmarks are here to prove it. ~3x faster
 // to do atomic.Bool.Swap instead of a lock/unlock.
