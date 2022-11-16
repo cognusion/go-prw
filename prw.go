@@ -1,12 +1,14 @@
 // Package prw provides PluggableResponseWriter, which
-// is a ResponseWriter that provides reusability and
-// resiliency, optimized for handler chains where multiple middlewares may
-// want to modify the response
+// is a ResponseWriter and Hijacker (for websockets) that provides reusability and
+// resiliency, optimized for handler chains where multiple middlewares
+// may want to modify the response. It also can Marshal/Unmarshal the core response parts
+// (body, status, headers) for use with caching operations.
 package prw
 
 import (
 	"bufio"
 	"bytes"
+	"encoding/gob"
 	"errors"
 	"net"
 	"net/http"
@@ -38,6 +40,40 @@ type PluggableResponseWriter struct {
 	addHeaders map[string]string
 	hijacked   bool
 	closeLock  sync.Mutex
+}
+
+// simpleResponse is a struct to assist with encoding/decoding the minimum needed to
+// preserve a response for caching
+type simpleResponse struct {
+	Body    []byte
+	Status  int
+	Headers http.Header
+}
+
+// toSimpleResponse returns a simplified representation of the PRW as a simpleResponse
+func (w *PluggableResponseWriter) toSimpleResponse() *simpleResponse {
+	return &simpleResponse{
+		Body:    w.Body.Bytes(),
+		Status:  w.status,
+		Headers: w.headers,
+	}
+}
+
+// fromSimpleResponse replaces parts of the PRW with the values from the simpleResponse
+func (w *PluggableResponseWriter) fromSimpleResponse(s *simpleResponse) {
+	w.closeLock.Lock()
+	defer w.closeLock.Unlock()
+
+	// We need to recycle the existing body before replacing it. PRW.Close() will
+	// recycle the new one eventually.
+	b := bodyPool.Get().(*bytes.Buffer)
+	b.Reset()
+	b.Write(s.Body)
+	bodyPool.Put(w.Body)
+
+	w.Body = b
+	w.status = s.Status
+	w.headers = s.Headers
 }
 
 // NewPluggableResponseWriterIfNot returns a pointer to an initialized PluggableResponseWriter and true,
@@ -252,6 +288,41 @@ func (w *PluggableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) 
 	}
 	w.hijacked = true
 	return hj.Hijack()
+}
+
+// MarshalBinary is used by encoding/gob to create a representation for encoding.
+func (w *PluggableResponseWriter) MarshalBinary() ([]byte, error) {
+	// we don't use the bodyPool here because we have to return the
+	// .Bytes and that creates a defer race
+	var b bytes.Buffer
+	s := w.toSimpleResponse()
+	enc := gob.NewEncoder(&b)
+	err := enc.Encode(s)
+	if err != nil {
+		return []byte{}, err
+	}
+	return b.Bytes(), nil
+}
+
+// UnmarshalBinary is used by encoding/gob to reconstitute a previously-encoded instance.
+func (w *PluggableResponseWriter) UnmarshalBinary(data []byte) error {
+	var (
+		s simpleResponse
+		b = bodyPool.Get().(*bytes.Buffer)
+	)
+	b.Reset()
+	defer bodyPool.Put(b)
+	if _, err := b.Write(data); err != nil {
+		return err
+	}
+
+	dec := gob.NewDecoder(b)
+	err := dec.Decode(&s)
+	if err != nil {
+		return err
+	}
+	w.fromSimpleResponse(&s)
+	return nil
 }
 
 // syncHeaders is a helper to call trimHeaders and setHeaders

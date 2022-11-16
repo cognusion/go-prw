@@ -74,6 +74,52 @@ func Test_Write(t *testing.T) {
 	})
 }
 
+func Test_SimpleResponse(t *testing.T) {
+	p := NewPluggableResponseWriter()
+	defer p.Close()
+
+	Convey("Writing works are expected", t, func() {
+		p.WriteHeader(http.StatusOK)
+		So(p.Code(), ShouldEqual, http.StatusOK)
+
+		// Testing roll-up
+		n, err := p.Write([]byte("hola adios"))
+		So(err, ShouldBeNil)
+		So(n, ShouldEqual, 10)
+		So(p.Length(), ShouldEqual, 10)
+		So(p.Code(), ShouldEqual, http.StatusOK)
+		So(p.Body.String(), ShouldEqual, "hola adios")
+
+		// Test the SimpleResponse TOREMOVE
+		s := p.toSimpleResponse()
+		So(s.Headers, ShouldResemble, p.headers)
+		So(s.Status, ShouldEqual, p.status)
+		So(s.Body, ShouldResemble, p.Body.Bytes())
+
+		// Test marshalling
+		Convey("Marshalling and unmarshalling work as expected", func() {
+			mp, err := p.MarshalBinary()
+			So(err, ShouldBeNil)
+			So(mp, ShouldNotBeEmpty)
+
+			// Make some changes
+			n, err := p.Write([]byte(" OMG THIS SHOULDN'T BE HERE"))
+			So(err, ShouldBeNil)
+			So(n, ShouldEqual, 27)
+			p.WriteHeader(http.StatusForbidden)
+			So(p.Code(), ShouldEqual, http.StatusForbidden)
+			So(p.Body.String(), ShouldEqual, "hola adios OMG THIS SHOULDN'T BE HERE")
+
+			err = p.UnmarshalBinary(mp)
+			So(err, ShouldBeNil)
+			So(p.Length(), ShouldEqual, 10)
+			So(p.Code(), ShouldEqual, http.StatusOK)
+			So(p.Body.String(), ShouldEqual, "hola adios")
+		})
+
+	})
+}
+
 func Test_Flush(t *testing.T) {
 	Convey("When a test server writes stuff and FlushToIf is called, it works as expected", t, func(c C) {
 		testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
