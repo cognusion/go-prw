@@ -14,23 +14,20 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/cognusion/go-recyclable"
 	"go.uber.org/atomic"
 )
 
 var (
-	// We create a pool of bytes.Buffer to optimize memory CRUD
-	bodyPool = sync.Pool{
-		New: func() interface{} {
-			return new(bytes.Buffer)
-		},
-	}
+	// We create a pool of recyclable.Buffer to optimize memory CRUD
+	bodyPool = recyclable.NewBufferPool()
 )
 
 // PluggableResponseWriter is a ResponseWriter that provides
 // reusability and resiliency, optimized for handler chains where multiple
 // middlewares may want to modify the response
 type PluggableResponseWriter struct {
-	Body       *bytes.Buffer
+	Body       *recyclable.Buffer
 	status     int
 	headers    http.Header
 	orig       http.ResponseWriter
@@ -66,10 +63,9 @@ func (w *PluggableResponseWriter) fromSimpleResponse(s *simpleResponse) {
 
 	// We need to recycle the existing body before replacing it. PRW.Close() will
 	// recycle the new one eventually.
-	b := bodyPool.Get().(*bytes.Buffer)
-	b.Reset()
-	b.Write(s.Body)
-	bodyPool.Put(w.Body)
+	b := bodyPool.Get()
+	b.Reset(s.Body)
+	w.Body.Close()
 
 	w.Body = b
 	w.status = s.Status
@@ -109,8 +105,8 @@ func NewPluggableResponseWriterFromOld(rw http.ResponseWriter) *PluggableRespons
 func NewPluggableResponseWriter() *PluggableResponseWriter {
 	w := PluggableResponseWriter{}
 	// Empty body, get a buffer
-	w.Body = bodyPool.Get().(*bytes.Buffer)
-	w.Body.Reset() // we don't trust it's clean
+	w.Body = bodyPool.Get()
+	w.Body.Reset([]byte{}) // we don't trust it's clean
 	w.headers = make(map[string][]string)
 	w.rmHeaders = make([]string, 0)
 	w.addHeaders = make(map[string]string)
@@ -194,7 +190,7 @@ func (w *PluggableResponseWriter) Close() {
 	defer w.closeLock.Unlock()
 
 	if w.Body != nil {
-		bodyPool.Put(w.Body)
+		w.Body.Close()
 		w.Body = nil
 	}
 }
@@ -308,13 +304,10 @@ func (w *PluggableResponseWriter) MarshalBinary() ([]byte, error) {
 func (w *PluggableResponseWriter) UnmarshalBinary(data []byte) error {
 	var (
 		s simpleResponse
-		b = bodyPool.Get().(*bytes.Buffer)
+		b = bodyPool.Get()
 	)
-	b.Reset()
-	defer bodyPool.Put(b)
-	if _, err := b.Write(data); err != nil {
-		return err
-	}
+	defer b.Close()
+	b.Reset(data)
 
 	dec := gob.NewDecoder(b)
 	err := dec.Decode(&s)

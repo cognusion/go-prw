@@ -1,7 +1,6 @@
 package prw
 
 import (
-	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -136,11 +135,9 @@ func Test_Flush(t *testing.T) {
 		resp, err := http.Get(testServer.URL)
 		So(err, ShouldBeNil)
 		So(resp.StatusCode, ShouldEqual, http.StatusInternalServerError)
-		b := bodyPool.Get().(*bytes.Buffer)
-		b.Reset()
-		defer bodyPool.Put(b)
-		_, err = b.ReadFrom(resp.Body)
-		So(err, ShouldBeNil)
+		b := bodyPool.Get()
+		defer b.Close()
+		b.ResetFromReader(resp.Body)
 		So(b.String(), ShouldEqual, "Oh this is bad")
 	})
 
@@ -158,11 +155,9 @@ func Test_Flush(t *testing.T) {
 		resp, err := http.Get(testServer.URL)
 		So(err, ShouldBeNil)
 		So(resp.StatusCode, ShouldEqual, http.StatusInternalServerError)
-		b := bodyPool.Get().(*bytes.Buffer)
-		b.Reset()
-		defer bodyPool.Put(b)
-		_, err = b.ReadFrom(resp.Body)
-		So(err, ShouldBeNil)
+		b := bodyPool.Get()
+		defer b.Close()
+		b.ResetFromReader(resp.Body)
 		So(b.String(), ShouldEqual, "Oh this is bad")
 	})
 }
