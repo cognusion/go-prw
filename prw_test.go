@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	satomic "sync/atomic"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -199,18 +200,23 @@ func BenchmarkMutex(b *testing.B) {
 	}
 }
 
-func BenchmarkAtomicBool(b *testing.B) {
+func BenchmarkUberAtomicBool(b *testing.B) {
 	var (
 		ab atomic.Bool
-		v  bool
 	)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		v = ab.Swap(true)
+		_ = ab.Swap(true)
 	}
-	// Satisfy vars
-	if v {
-		v = true
+}
+
+func BenchmarkSyncAtomicBool(b *testing.B) {
+	var (
+		ab satomic.Bool
+	)
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ab.Swap(true)
 	}
 }
 
