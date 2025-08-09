@@ -5,7 +5,6 @@ go 1.18
 require (
 	github.com/cognusion/go-recyclable v1.0.0
 	github.com/smartystreets/goconvey v1.7.2
-	go.uber.org/atomic v1.10.0
 )
 
 require (

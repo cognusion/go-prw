@@ -13,9 +13,9 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cognusion/go-recyclable"
-	"go.uber.org/atomic"
 )
 
 var (
@@ -103,14 +103,15 @@ func NewPluggableResponseWriterFromOld(rw http.ResponseWriter) *PluggableRespons
 
 // NewPluggableResponseWriter returns a pointer to an initialized PluggableResponseWriter
 func NewPluggableResponseWriter() *PluggableResponseWriter {
-	w := PluggableResponseWriter{}
-	// Empty body, get a buffer
-	w.Body = bodyPool.Get()
-	w.Body.Reset([]byte{}) // we don't trust it's clean
-	w.headers = make(map[string][]string)
-	w.rmHeaders = make([]string, 0)
-	w.addHeaders = make(map[string]string)
-	return &w
+	buff := bodyPool.Get()
+	buff.Reset([]byte{}) // we don't trust it's clean
+
+	return &PluggableResponseWriter{
+		Body:       buff,
+		headers:    make(map[string][]string),
+		rmHeaders:  make([]string, 0),
+		addHeaders: make(map[string]string),
+	}
 }
 
 // SetHeadersToRemove sets a list of headers to remove before flushing/writing headers to the response

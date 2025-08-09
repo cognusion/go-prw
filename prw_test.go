@@ -1,14 +1,14 @@
 package prw
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	satomic "sync/atomic"
+	"sync/atomic"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
-	"go.uber.org/atomic"
 )
 
 func Test_NewPRW(t *testing.T) {
@@ -187,6 +187,17 @@ func Test_Hijack(t *testing.T) {
 	})
 }
 
+func Test_Interfaces(t *testing.T) {
+	Convey("A PluggableResponseWriter implements all of the interfaces it should.", t, FailureContinues, func() {
+		p := NewPluggableResponseWriter()
+		So(p, ShouldImplement, (*http.ResponseWriter)(nil))
+		So(p, ShouldImplement, (*http.Hijacker)(nil))
+		So(p, ShouldImplement, (*http.Flusher)(nil))
+		So(p, ShouldImplement, (*io.Writer)(nil))
+
+	})
+}
+
 // Introducing a lock on flushing seemed non-performant to me, when all we need is
 // the atomic setting of a bool. These benchmarks are here to prove it. ~3x faster
 // to do atomic.Bool.Swap instead of a lock/unlock.
@@ -200,19 +211,9 @@ func BenchmarkMutex(b *testing.B) {
 	}
 }
 
-func BenchmarkUberAtomicBool(b *testing.B) {
-	var (
-		ab atomic.Bool
-	)
-	b.StartTimer()
-	for i := 0; i < b.N; i++ {
-		_ = ab.Swap(true)
-	}
-}
-
 func BenchmarkSyncAtomicBool(b *testing.B) {
 	var (
-		ab satomic.Bool
+		ab atomic.Bool
 	)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
